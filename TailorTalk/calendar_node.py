@@ -14,6 +14,7 @@ from typing import List, Dict, Any
 import datetime
 import os
 import pytz
+import streamlit as st
 
 # Google Calendar API imports
 from googleapiclient.discovery import build
@@ -25,7 +26,7 @@ import pickle
 import requests
 import re
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"  # Updated endpoint
 
 SCOPES = ['https://www.googleapis.com/auth/calendar']
@@ -34,35 +35,25 @@ CREDENTIALS_PATH = 'credentials.json'
 
 # 1. Google Calendar API Auth
 
-def get_calendar_service():
-    creds = None
-    if os.path.exists(TOKEN_PATH):
-        with open(TOKEN_PATH, 'rb') as token:
-            creds = pickle.load(token)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open(TOKEN_PATH, 'wb') as token:
-            pickle.dump(creds, token)
-    service = build('calendar', 'v3', credentials=creds)
-    return service
+def get_calendar_service(credentials=None, credentials_path=None):
+    if credentials is not None:
+        return build('calendar', 'v3', credentials=credentials)
+    raise RuntimeError("Google OAuth credentials must be provided. The local OAuth flow is not supported in production. Please log in via the web interface.")
 
 # 2. Fetch busy slots from Google Calendar
 
-def get_calendar_availability(user_email: str, start_time: str, end_time: str) -> List[Dict[str, Any]]:
+def get_calendar_availability(user_email: str, start_time: str, end_time: str, credentials=None, credentials_path=None) -> List[Dict[str, Any]]:
     """
     Retrieve busy slots from the user's Google Calendar between start_time and end_time.
     Args:
         user_email (str): The user's email address (not used for auth, just for info).
         start_time (str): ISO 8601 start datetime (e.g., '2024-06-10T00:00:00Z').
         end_time (str): ISO 8601 end datetime.
+        credentials (Credentials): Google OAuth credentials object (required)
     Returns:
         List[Dict[str, Any]]: List of busy slots (start, end).
     """
-    service = get_calendar_service()
+    service = get_calendar_service(credentials=credentials)
     body = {
         "timeMin": start_time,
         "timeMax": end_time,
