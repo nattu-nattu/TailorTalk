@@ -1,7 +1,9 @@
 import streamlit as st
 from typing import List, Dict, Any
 import json
-from dotenv import load_dotenv
+from google_auth_oauthlib.flow import Flow
+from googleapiclient.discovery import build
+from google.oauth2.credentials import Credentials
 
 from intent_node import analyze_intent
 from extraction_node import extract_details
@@ -12,8 +14,6 @@ from confirmation_node import handle_confirmation_response
 from email_node import validate_email_format
 from booking_node import book_calendar_event, generate_booking_message
 from notification_node import generate_notification_email, send_email
-
-load_dotenv()
 
 st.set_page_config(page_title="TailorTalk - Calendar Booking AI", page_icon="📅", layout="centered")
 
@@ -29,6 +29,34 @@ st.markdown("""
 Engage in a natural conversation to book, check, or modify your calendar appointments. Powered by Groq LLM and FastAPI backend logic.
 """)
 
+# --- Google OAuth2 Web Flow ---
+SCOPES = ["https://www.googleapis.com/auth/calendar"]
+REDIRECT_URI = "https://tailortalk-cdsgibae8euseen2yindfz.streamlit.app/"  # Update to your deployed Streamlit app URL
+
+client_config = json.loads(st.secrets["google"]["credentials"])
+
+def get_flow():
+    return Flow.from_client_config(
+        client_config,
+        scopes=SCOPES,
+        redirect_uri=REDIRECT_URI
+    )
+
+def credentials_to_dict(credentials):
+    return {
+        'token': credentials.token,
+        'refresh_token': credentials.refresh_token,
+        'token_uri': credentials.token_uri,
+        'client_id': credentials.client_id,
+        'client_secret': credentials.client_secret,
+        'scopes': credentials.scopes
+    }
+
+def get_credentials_from_session():
+    if "google_credentials" in st.session_state:
+        return Credentials(**st.session_state["google_credentials"])
+    return None
+
 # --- User Info Collection ---
 if "user_name" not in st.session_state:
     st.session_state.user_name = ""
@@ -37,8 +65,28 @@ if "user_email" not in st.session_state:
 if "user_verified" not in st.session_state:
     st.session_state.user_verified = False
 
+# --- Google OAuth2 Login ---
+query_params = st.experimental_get_query_params()
+if "code" not in query_params and "google_credentials" not in st.session_state:
+    st.info("Please log in with Google to connect your calendar.")
+    flow = get_flow()
+    auth_url, _ = flow.authorization_url(prompt='consent', access_type='offline', include_granted_scopes='true')
+    st.markdown(f"[Login with Google Calendar]({auth_url})")
+    st.stop()
+
+if "code" in query_params and "google_credentials" not in st.session_state:
+    code = query_params["code"][0]
+    flow = get_flow()
+    flow.fetch_token(code=code)
+    credentials = flow.credentials
+    st.session_state["google_credentials"] = credentials_to_dict(credentials)
+    # Remove code from URL for cleanliness
+    st.experimental_set_query_params()
+    st.success("Google Calendar connected!")
+
+# --- User Info Form ---
 if not st.session_state.user_verified:
-    st.info("Before we begin, please provide your name and email address to connect your Google Calendar.")
+    st.info("Before we begin, please provide your name and email address.")
     with st.form("user_info_form", clear_on_submit=False):
         user_name = st.text_input("Your Name", value=st.session_state.user_name)
         user_email = st.text_input("Your Email Address", value=st.session_state.user_email)
@@ -49,23 +97,10 @@ if not st.session_state.user_verified:
             elif not user_email.strip() or not validate_email_format(user_email):
                 st.warning("Please enter a valid email address.")
             else:
-                # Try to access Google Calendar for this email
-                try:
-                    # Check for the next 7 days (example)
-                    import datetime
-                    now = datetime.datetime.utcnow()
-                    week_later = now + datetime.timedelta(days=7)
-                    busy = get_calendar_availability(
-                        user_email,
-                        now.isoformat() + "Z",
-                        week_later.isoformat() + "Z"
-                    )
-                    st.session_state.user_name = user_name.strip()
-                    st.session_state.user_email = user_email.strip()
-                    st.session_state.user_verified = True
-                    st.success(f"Welcome, {user_name}! Your calendar is connected.")
-                except Exception as e:
-                    st.error(f"Failed to access Google Calendar for {user_email}: {e}")
+                st.session_state.user_name = user_name.strip()
+                st.session_state.user_email = user_email.strip()
+                st.session_state.user_verified = True
+                st.success(f"Welcome, {user_name}! You are ready to book.")
     st.stop()
 
 # --- Chat State Initialization ---
@@ -129,15 +164,16 @@ if user_input:
         print(f"[Router] {router_result['reason']}")
     next_node = router_result.get("next_node", "end")
     # 4. Node Handling (robust logic)
+    credentials = get_credentials_from_session()
     if next_node == "suggestion":
-        # Use the user's calendar to suggest slots
         import datetime
         now = datetime.datetime.utcnow()
         week_later = now + datetime.timedelta(days=7)
         busy = get_calendar_availability(
             st.session_state.user_email,
             now.isoformat() + "Z",
-            week_later.isoformat() + "Z"
+            week_later.isoformat() + "Z",
+            credentials=credentials
         )
         from calendar_node import find_free_slots
         free_slots = find_free_slots(busy, now.isoformat() + "Z", week_later.isoformat() + "Z")
@@ -152,7 +188,6 @@ if user_input:
             st.stop()
         append_and_display("assistant", suggestion)
     elif next_node == "confirmation":
-        # Display booking details summary before asking for confirmation
         details = st.session_state.extracted_details
         summary_lines = []
         if details.get("date"): summary_lines.append(f"**Date:** {details['date']}")
@@ -166,7 +201,6 @@ if user_input:
         confirmation_prompt = "Do you confirm the booking details? (yes/no)"
         append_and_display("assistant", confirmation_prompt)
     elif next_node == "booking":
-        # Only proceed with booking if user confirmed
         last_user_message = st.session_state.history[-1]["content"].strip().lower() if st.session_state.history else ""
         if last_user_message in ["no", "cancel", "not now"]:
             append_and_display("assistant", "Okay, the booking has been cancelled. If you want to start over or change any details, just let me know!")
@@ -174,7 +208,7 @@ if user_input:
         elif last_user_message not in ["yes", "confirm", "i confirm", "confirmed"]:
             append_and_display("assistant", "Please type 'yes' to confirm your booking or 'no' to cancel.")
             st.stop()
-        booking_result = book_calendar_event(st.session_state.extracted_details)
+        booking_result = book_calendar_event(st.session_state.extracted_details, credentials=credentials)
         if isinstance(booking_result, dict) and "error" in booking_result and booking_result["error"]:
             append_and_display("assistant", f"[Booking Error] {booking_result['error']}")
             st.stop()
@@ -188,7 +222,6 @@ if user_input:
             append_and_display("assistant", f"[Booking Message Error] {booking_msg}")
             st.stop()
         append_and_display("assistant", booking_msg)
-        # Send confirmation email
         notif = generate_notification_email(
             event_details=st.session_state.extracted_details,
             notification_type="confirmation",
