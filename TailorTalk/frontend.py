@@ -21,7 +21,7 @@ st.sidebar.title("TailorTalk Setup & Info")
 st.sidebar.markdown("""
 **How to use:**
 - Start a conversation to book, check, or modify a meeting.
-- The agent will guide you through the process.
+- The agent willllllllll guide you through the process.
 """)
 
 st.title("📅 TailorTalk: Conversational Calendar Booking Agent")
@@ -30,7 +30,7 @@ Engage in a natural conversation to book, check, or modify your calendar appoint
 """)
 
 # --- Google OAuth2 Web Flow ---
-SCOPES = ["https://www.googleapis.com/auth/calendar"]
+SCOPES = ["https://www.googleapis.com/auth/calendar", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile", "openid"]
 REDIRECT_URI = "https://tailortalk-cdsgibae8euseen2yindfz.streamlit.app/"  # Update to your deployed Streamlit app URL
 
 client_config = json.loads(st.secrets["google"]["credentials"])
@@ -57,18 +57,9 @@ def get_credentials_from_session():
         return Credentials(**st.session_state["google_credentials"])
     return None
 
-# --- User Info Collection ---
-if "user_name" not in st.session_state:
-    st.session_state.user_name = ""
-if "user_email" not in st.session_state:
-    st.session_state.user_email = ""
-if "user_verified" not in st.session_state:
-    st.session_state.user_verified = False
-
 # --- Google OAuth2 Login ---
 query_params = st.experimental_get_query_params()
 if "google_credentials" not in st.session_state:
-    # If not authenticated, show login link and stop
     if "code" not in query_params:
         st.info("Please log in with Google to connect your calendar.")
         flow = get_flow()
@@ -81,28 +72,30 @@ if "google_credentials" not in st.session_state:
         flow.fetch_token(code=code)
         credentials = flow.credentials
         st.session_state["google_credentials"] = credentials_to_dict(credentials)
-        # Remove code from URL for cleanliness
         st.experimental_set_query_params()
         st.success("Google Calendar connected!")
 
-# --- User Info Form ---
-if not st.session_state.user_verified:
-    st.info("Before we begin, please provide your name and email address.")
-    with st.form("user_info_form", clear_on_submit=False):
-        user_name = st.text_input("Your Name", value=st.session_state.user_name)
-        user_email = st.text_input("Your Email Address", value=st.session_state.user_email)
-        submitted = st.form_submit_button("Continue")
-        if submitted:
-            if not user_name.strip():
-                st.warning("Please enter your name.")
-            elif not user_email.strip() or not validate_email_format(user_email):
-                st.warning("Please enter a valid email address.")
-            else:
-                st.session_state.user_name = user_name.strip()
-                st.session_state.user_email = user_email.strip()
-                st.session_state.user_verified = True
-                st.success(f"Welcome, {user_name}! You are ready to book.")
-    st.stop()
+# --- Extract User Info from Google Profile ---
+if "user_email" not in st.session_state or "user_name" not in st.session_state:
+    credentials = get_credentials_from_session()
+    try:
+        people_service = build('people', 'v1', credentials=credentials)
+        profile = people_service.people().get(resourceName='people/me', personFields='names,emailAddresses').execute()
+        email = None
+        name = None
+        if 'emailAddresses' in profile:
+            email = profile['emailAddresses'][0]['value']
+        if 'names' in profile:
+            name = profile['names'][0]['displayName']
+        if not email:
+            st.error("Could not retrieve your email from Google profile. Please ensure you have granted email access.")
+            st.stop()
+        st.session_state["user_email"] = email
+        st.session_state["user_name"] = name if name else email.split("@")[0]
+        st.success(f"Welcome, {st.session_state['user_name']}! You are ready to book.")
+    except Exception as e:
+        st.error(f"Failed to retrieve your Google profile: {e}")
+        st.stop()
 
 # --- Chat State Initialization ---
 if "history" not in st.session_state:
@@ -147,7 +140,7 @@ if user_input:
     if "error" in details_result:
         append_and_display("assistant", f"[Extraction Error] {details_result['error']}")
         st.stop()
-    # Always use the provided user email and name
+    # Always use the Google-authenticated user email and name
     details_result["participants"] = [st.session_state.user_email]
     details_result["user_name"] = st.session_state.user_name
     st.session_state.extracted_details = details_result
