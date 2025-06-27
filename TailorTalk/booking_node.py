@@ -18,44 +18,32 @@ from google.auth.transport.requests import Request
 import pickle
 import os
 import datetime
+import streamlit as st
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"  # Updated endpoint
 
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 TOKEN_PATH = 'token.pickle'
 CREDENTIALS_PATH = 'credentials.json'
 
-def get_calendar_service():
-    """
-    Authenticate and return the Google Calendar API service.
-    """
-    creds = None
-    if os.path.exists(TOKEN_PATH):
-        with open(TOKEN_PATH, 'rb') as token:
-            creds = pickle.load(token)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open(TOKEN_PATH, 'wb') as token:
-            pickle.dump(creds, token)
-    service = build('calendar', 'v3', credentials=creds)
-    return service
+def get_calendar_service(credentials=None, credentials_path=None):
+    if credentials is not None:
+        return build('calendar', 'v3', credentials=credentials)
+    raise RuntimeError("Google OAuth credentials must be provided. The local OAuth flow is not supported in production. Please log in via the web interface.")
 
 
-def book_calendar_event(event_details: Dict[str, Any]) -> Dict[str, Any]:
+def book_calendar_event(event_details: Dict[str, Any], credentials=None, credentials_path=None) -> Dict[str, Any]:
     """
     Book a calendar event using Google Calendar API.
     Args:
         event_details (Dict[str, Any]): Details for the event (date, time, participants, etc.)
+        credentials (Credentials): Google OAuth credentials object (required)
     Returns:
         Dict[str, Any]: Result with 'success' (bool), 'event_id' (str, if successful), and 'error' (str, if any)
     """
     try:
-        service = get_calendar_service()
+        service = get_calendar_service(credentials=credentials)
         # Parse event details
         date = event_details.get("date")  # e.g., '2024-06-10'
         time = event_details.get("time")  # e.g., '14:00'
