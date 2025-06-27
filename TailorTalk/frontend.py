@@ -67,22 +67,23 @@ if "user_verified" not in st.session_state:
 
 # --- Google OAuth2 Login ---
 query_params = st.experimental_get_query_params()
-if "code" not in query_params and "google_credentials" not in st.session_state:
-    st.info("Please log in with Google to connect your calendar.")
-    flow = get_flow()
-    auth_url, _ = flow.authorization_url(prompt='consent', access_type='offline', include_granted_scopes='true')
-    st.markdown(f"[Login with Google Calendar]({auth_url})")
-    st.stop()
-
-if "code" in query_params and "google_credentials" not in st.session_state:
-    code = query_params["code"][0]
-    flow = get_flow()
-    flow.fetch_token(code=code)
-    credentials = flow.credentials
-    st.session_state["google_credentials"] = credentials_to_dict(credentials)
-    # Remove code from URL for cleanliness
-    st.experimental_set_query_params()
-    st.success("Google Calendar connected!")
+if "google_credentials" not in st.session_state:
+    # If not authenticated, show login link and stop
+    if "code" not in query_params:
+        st.info("Please log in with Google to connect your calendar.")
+        flow = get_flow()
+        auth_url, _ = flow.authorization_url(prompt='consent', access_type='offline', include_granted_scopes='true')
+        st.markdown(f"[Login with Google Calendar]({auth_url})")
+        st.stop()
+    else:
+        code = query_params["code"][0]
+        flow = get_flow()
+        flow.fetch_token(code=code)
+        credentials = flow.credentials
+        st.session_state["google_credentials"] = credentials_to_dict(credentials)
+        # Remove code from URL for cleanliness
+        st.experimental_set_query_params()
+        st.success("Google Calendar connected!")
 
 # --- User Info Form ---
 if not st.session_state.user_verified:
